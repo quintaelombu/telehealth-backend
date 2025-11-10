@@ -1,3 +1,11 @@
-import secrets
-def jitsi_room(appointment_id:int)->str:
-    return f"https://meet.jit.si/EMILIO_{appointment_id}_{secrets.token_hex(4)}"
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.post("/")
+def create_appointment():
+    return {"status": "ok", "message": "appointment created"}
+
+@router.get("/{appointment_id}/join")
+def join_appointment(appointment_id: str):
+    return {"status": "ok", "join_url": f"https://example.com/{appointment_id}"}

@@ -26,3 +26,20 @@ app.include_router(services.router, prefix="/services")  # nuevo router agregado
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Backend Teleconsulta Emilio activo"}
+# --- al final de main.py ---
+if __name__ == "__main__":
+    import os
+    import uvicorn
+
+    port = int(os.getenv("PORT", "8080"))
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+        # No pases flags de h11 aquí a menos que sepas que los necesitás.
+        # Si alguna vez hiciera falta, en uvicorn.run se usa con underscores:
+        # h11_max_incomplete_event_size=65536,
+    )

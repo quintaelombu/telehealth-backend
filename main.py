@@ -1,33 +1,28 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import appointments, payments, services
+import auth, payments, video, models, db, services  # Importamos los módulos
 
 app = FastAPI(
     title="Teleconsulta Emilio",
-    version="1.0.0",
-    description="Backend de teleconsultas médicas con integración de pagos y videollamadas."
+    description="Backend de teleconsultas médicas con integración de pagos y videollamadas",
+    version="1.1.0"
 )
 
-# CORS — permite que el frontend (Vercel) se conecte sin restricciones
-origins = [
-    "http://localhost:3000",
-    "https://teleconsulta-emilio.vercel.app",
-    "https://telehealth-frontend.vercel.app"
-]
-
+# CORS para permitir conexión con el frontend en Vercel
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # luego se puede restringir al dominio final
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Routers principales
-app.include_router(appointments.router)
-app.include_router(payments.router)
-app.include_router(services.router)
+# Rutas principales
+app.include_router(auth.router, prefix="/auth")
+app.include_router(payments.router, prefix="/payments")
+app.include_router(video.router, prefix="/appointments")
+app.include_router(services.router, prefix="/services")  # nuevo router agregado
 
 @app.get("/")
 def root():
-    return {"message": "API Teleconsulta Emilio funcionando correctamente 🚀"}
+    return {"status": "ok", "message": "Backend Teleconsulta Emilio activo"}

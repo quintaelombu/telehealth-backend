@@ -19,8 +19,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+from fastapi.middleware.cors import CORSMiddleware
 
-# Routers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://teleconsulta-emilio.vercel.app"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)# Routers
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(payments_router, prefix="/payments", tags=["payments"])
 app.include_router(video_router, prefix="/appointments", tags=["appointments"])

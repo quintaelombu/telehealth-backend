@@ -60,3 +60,25 @@ class Appointment(Base):
 
     patient = relationship("Patient", lazy="joined")
     service = relationship("Service", lazy="joined")
+# models.py — esquemas Pydantic
+
+from pydantic import BaseModel, EmailStr, Field
+from datetime import datetime
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class ApptIn(BaseModel):
+    patient_name: str = Field(min_length=1)
+    patient_email: EmailStr
+    reason: str = Field(min_length=1)
+    price: int = Field(ge=0)
+    duration: int = Field(ge=5)          # minutos
+    start_at: datetime                   # ISO-8601
+
+class ApptOut(BaseModel):
+    id: str
+    checkout_url: str | None = None
+    join_url: str | None = None
+    paid: bool = False

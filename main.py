@@ -1,32 +1,37 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import auth, payments, video, models, db, services  # Importamos los módulos
+
+from auth import router as auth_router
+from payments import router as payments_router
+from video import router as video_router
 
 app = FastAPI(
     title="Teleconsulta Emilio",
-    description="Backend de teleconsultas médicas con integración de pagos y videollamadas",
-    version="1.1.0"
+    version="1.0.0",
+    description="Backend de teleconsultas del Dr. Emilio Galdeano",
 )
 
-# CORS para permitir conexión con el frontend en Vercel
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # luego se puede restringir al dominio final
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Rutas principales
-app.include_router(auth.router, prefix="/auth")
-app.include_router(payments.router, prefix="/payments")
-app.include_router(video.router, prefix="/appointments")
-app.include_router(services.router, prefix="/services")  # nuevo router agregado
+# Routers
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(payments_router, prefix="/payments", tags=["payments"])
+app.include_router(video_router, prefix="/appointments", tags=["appointments"])
+
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Backend Teleconsulta Emilio activo"}
-# --- al final de main.py ---
+    return {"message": "API online — Teleconsulta Emilio"}
+
+
+# --- Bloque de ejecución local / Railway ---
 if __name__ == "__main__":
     import os
     import uvicorn
@@ -37,9 +42,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port,
         log_level="info",
-        proxy_headers=True,
-        forwarded_allow_ips="*",
-        # No pases flags de h11 aquí a menos que sepas que los necesitás.
-        # Si alguna vez hiciera falta, en uvicorn.run se usa con underscores:
-        # h11_max_incomplete_event_size=65536,
     )

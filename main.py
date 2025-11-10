@@ -27,7 +27,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-)# Routers
+)
+# Routers
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(payments_router, prefix="/payments", tags=["payments"])
 app.include_router(video_router, prefix="/appointments", tags=["appointments"])

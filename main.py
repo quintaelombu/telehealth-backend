@@ -78,4 +78,3 @@ def webhook_url() -> Optional[str]:
     if BACKEND_URL:
         return f"{BACKEND_URL.rstrip('/')}/payments/webhook"
     return None
-export const API_URL = "https://telehealth-backend-production-0021.up.railway.app";

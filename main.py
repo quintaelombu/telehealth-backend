@@ -30,15 +30,22 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
-# CORS (permitimos el frontend en Vercel y, si falta, cualquier origen)
-allow_origins = []
-if FRONTEND_URL:
-    allow_origins.append(FRONTEND_URL)
-allow_origins += ["http://localhost:3000", "http://127.0.0.1:3000", "*"]
+# CORS (permite frontend en Vercel y localhost)
+from fastapi.middleware.cors import CORSMiddleware
+import os
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://teleconsulta-emilio.vercel.app")
+
+origins = [
+    FRONTEND_URL,
+    "https://teleconsulta-emilio.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

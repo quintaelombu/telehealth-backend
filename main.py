@@ -1,52 +1,107 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, EmailStr
-from typing import Optional
-import uuid
 import os
-import mercadopago
+import uuid
+from typing import Optional
 
-# ==================================================
-# CONFIGURACIÓN
-# ==================================================
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr, Field
 
+# ─────────────────────────────────────────────────────────
+# Variables de entorno
+# ─────────────────────────────────────────────────────────
+BASE_URL = os.getenv("BASE_URL", "").rstrip("/")          # ej: https://telehealth-backend-production-0021.up.railway.app
+FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")  # ej: https://teleconsulta-emilio.vercel.app
+MP_ACCESS_TOKEN = os.getenv("MP_ACCESS_TOKEN", "")
+
+# SDK de Mercado Pago
+try:
+    import mercadopago  # type: ignore
+except Exception:
+    mercadopago = None
+
+
+def get_mp_client():
+    """
+    Crea el cliente de Mercado Pago con el token de entorno.
+    Lanza error claro si falta el token o el SDK.
+    """
+    if mercadopago is None:
+        raise RuntimeError("SDK de Mercado Pago no está instalado (mercadopago).")
+
+    if not MP_ACCESS_TOKEN:
+        raise RuntimeError("MP_ACCESS_TOKEN no está configurado en las variables de entorno.")
+
+    return mercadopago.SDK(MP_ACCESS_TOKEN)
+
+
+def get_webhook_url() -> Optional[str]:
+    """URL de webhook a partir de BASE_URL si está configurada."""
+    if BASE_URL:
+        return f"{BASE_URL.rstrip('/')}/payments/webhook"
+    return None
+
+
+# ─────────────────────────────────────────────────────────
+# App FastAPI
+# ─────────────────────────────────────────────────────────
 app = FastAPI(
     title="Teleconsulta Emilio",
     version="1.0.0",
-    openapi_url="/openapi.json"
+    openapi_url="/openapi.json",
 )
 
-# Variables de entorno
-BACKEND_URL = os.getenv("BACKEND_URL", "")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "")
-MP_ACCESS_TOKEN = os.getenv("MP_ACCESS_TOKEN", "")
-mp_client = mercadopago.SDK(MP_ACCESS_TOKEN)
 
-# CORS (permite conexión entre backend y frontend)
-allow_origins = ["*"]
+# ─────────────────────────────────────────────────────────
+# CORS
+# ─────────────────────────────────────────────────────────
+origins = []
+
 if FRONTEND_URL:
-    allow_origins = [FRONTEND_URL, "http://localhost:3000", "http://127.0.0.1:3000"]
+    origins.append(FRONTEND_URL)
+
+# Dominios que estás usando en Vercel + local
+origins.extend(
+    [
+        "https://teleconsulta-emilio.vercel.app",
+        "https://teleconsulta-emilio-p3q6epu24-dr-emilios-projects.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+)
+
+# Eliminar duplicados
+origins = list(set(origins))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=origins,   # IMPORTANTE: sin "*"
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ==================================================
-# MODELOS
-# ==================================================
+
+# ─────────────────────────────────────────────────────────
+# Modelos
+# ─────────────────────────────────────────────────────────
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class LoginOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
 
 class ApptIn(BaseModel):
     patient_name: str = Field(..., min_length=1)
     patient_email: EmailStr
     reason: str = Field(..., min_length=1)
-    price: int = Field(..., ge=100)
-    duration: int = Field(..., ge=10, le=180)
-    start_at: Optional[str] = None
-    when_at: Optional[str] = None  # compatibilidad temporal
+    price: int = Field(..., ge=100)  # ARS
+    duration: int = Field(..., ge=10, le=180)  # minutos
+    start_at: str  # ISO string, ej: "2025-11-11T11:11:00.000Z"
+
 
 class ApptOut(BaseModel):
     id: str
@@ -55,87 +110,114 @@ class ApptOut(BaseModel):
     status: str
     detail: Optional[str] = None
 
-# ==================================================
-# RUTAS BÁSICAS
-# ==================================================
 
+# ─────────────────────────────────────────────────────────
+# Rutas básicas
+# ─────────────────────────────────────────────────────────
 @app.get("/", tags=["default"])
 def root():
     return {"ok": True, "service": "telehealth-backend", "version": "1.0.0"}
+
 
 @app.get("/ping", tags=["default"])
 def ping():
     return {"ok": True}
 
-# ==================================================
-# CREAR TURNOS
-# ==================================================
 
+# ─────────────────────────────────────────────────────────
+# Auth muy simple (solo para tener /auth/login en Swagger)
+# ─────────────────────────────────────────────────────────
+@app.post("/auth/login", response_model=LoginOut, tags=["auth"])
+def login(payload: LoginIn):
+    """
+    Login de demostración. No valida contra base de datos.
+    Devuelve siempre un token fijo para que puedas entrar al panel médico.
+    """
+    fake_token = "demo-token"
+    return LoginOut(access_token=fake_token)
+
+
+# ─────────────────────────────────────────────────────────
+# Crear turno y preferencia de pago en Mercado Pago
+# ─────────────────────────────────────────────────────────
 @app.post("/appointments", response_model=ApptOut, tags=["appointments"])
 def create_appointment(payload: ApptIn):
     """
-    Crea la preferencia de pago en Mercado Pago y devuelve el checkout_url.
+    Crea una preferencia de pago en Mercado Pago y devuelve el checkout_url.
+    También embebe metadatos básicos del turno en metadata.
     """
-    # Aceptar start_at o when_at
-    start_at_val = payload.start_at or payload.when_at
-    if not start_at_val:
-        raise HTTPException(status_code=400, detail="start_at is required")
-
+    # ID simple (podés migrar a DB luego)
     appt_id = str(uuid.uuid4())
 
-    # Crear preferencia en Mercado Pago
-    preference_data = {
+    # Cliente MP
+    try:
+        sdk = get_mp_client()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Datos de preferencia
+    preference = {
         "items": [
             {
-                "id": appt_id,
-                "title": payload.reason,
+                "title": payload.reason or "Consulta pediátrica",
                 "quantity": 1,
-                "unit_price": payload.price,
-                "currency_id": "ARS",
+                "unit_price": float(payload.price),  # ARS
             }
         ],
+        "payer": {
+            "name": payload.patient_name,
+            "email": payload.patient_email,
+        },
         "metadata": {
+            "appointment_id": appt_id,
             "patient_name": payload.patient_name,
             "patient_email": payload.patient_email,
             "reason": payload.reason,
-            "start_at": start_at_val,
+            "price": payload.price,
             "duration": payload.duration,
+            "start_at": payload.start_at,  # 🔹 Campo correcto que espera el backend
         },
-        "back_urls": {
-            "success": f"{FRONTEND_URL}/success",
-            "failure": f"{FRONTEND_URL}/failure",
-            "pending": f"{FRONTEND_URL}/pending",
-        },
-        "auto_return": "approved",
     }
 
+    webhook_url = get_webhook_url()
+    if webhook_url:
+        preference["notification_url"] = webhook_url
+
+    # Crear preferencia en MP
     try:
-        pref = mp_client.preference().create(preference_data)
-        if pref["status"] != 201:
-            raise Exception(str(pref))
-        checkout_url = pref["response"]["init_point"]
-        return ApptOut(
-            id=appt_id,
-            checkout_url=checkout_url,
-            join_url=None,
-            status="created",
-        )
+        result = sdk.preference().create(preference)
+        mp_resp = result.get("response", {})
+        checkout_url = mp_resp.get("init_point") or mp_resp.get("sandbox_init_point")
+        if not checkout_url:
+            raise HTTPException(
+                status_code=500,
+                detail="No se pudo obtener checkout_url desde Mercado Pago.",
+            )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al crear preferencia en Mercado Pago: {str(e)}",
+        )
 
-# ==================================================
-# WEBHOOK DE MERCADO PAGO
-# ==================================================
+    return ApptOut(
+        id=appt_id,
+        checkout_url=checkout_url,
+        join_url=None,
+        status="created",
+        detail=None,
+    )
 
+
+# ─────────────────────────────────────────────────────────
+# Webhook de Mercado Pago
+# ─────────────────────────────────────────────────────────
 @app.post("/payments/webhook", tags=["payments"])
-def mp_webhook(data: dict):
-    print("Webhook recibido:", data)
+async def payments_webhook(request: Request):
+    """
+    Webhook de Mercado Pago.
+    Por ahora solo registra el evento y responde 200 OK.
+    """
+    body = await request.json()
+    # En el futuro podés guardar esto en DB o actualizar estado del turno.
+    print("Webhook Mercado Pago:", body)
     return {"ok": True}
-
-# ==================================================
-# EJECUCIÓN LOCAL
-# ==================================================
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)

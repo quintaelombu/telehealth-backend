@@ -14,20 +14,6 @@ from pydantic import BaseModel, EmailStr, Field
 
 from sqlalchemy import create_engine, text
 
-DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
-
-if not DATABASE_URL:
-    print("ATENCIÓN: DATABASE_URL no está configurada. No se guardarán turnos en DB.")
-    engine = None
-else:
-    try:
-        engine = create_engine(DATABASE_URL)
-    except Exception as e:
-        print("ERROR al inicializar conexión a DB:", e)
-        engine = Noneelse:
-    print("ATENCIÓN: DATABASE_URL no está configurada. No se guardarán turnos en DB.")
-
-# ─────────────────────────────────────────────────────────
 # Variables de entorno
 # ─────────────────────────────────────────────────────────
 BASE_URL = os.getenv("BASE_URL", "").rstrip("/")          # ej: https://telehealth-backend-production-0021.up.railway.app

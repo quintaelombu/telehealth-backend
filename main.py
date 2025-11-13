@@ -1,33 +1,18 @@
 import os
 import uuid
 from typing import Optional
+from sqlalchemy import create_engine, text
 
-from fastapi import FastAPI, HTTPException, Request
+DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("No existe DATABASE_URL en las variables de entorno de Railway.")
+
+engine = create_engine(DATABASE_URL)from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
 # ─────────────────────────────────────────────────────────
-# Base de datos (PostgreSQL vía SQLAlchemy)
-# ─────────────────────────────────────────────────────────
-from sqlalchemy import (
-    create_engine,
-    MetaData,
-    Table,
-    Column,
-    String,
-    Integer,
-    Text,
-)
-
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-
-engine = None
-metadata = MetaData()
-appointments = None
-
-if DATABASE_URL:
-    try:
-        engine = create_engine(DATABASE_URL)
         # Definimos la tabla appointments de forma compatible
         appointments = Table(
             "appointments",

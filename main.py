@@ -7,6 +7,51 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
 # ─────────────────────────────────────────────────────────
+# Base de datos (PostgreSQL vía SQLAlchemy)
+# ─────────────────────────────────────────────────────────
+from sqlalchemy import (
+    create_engine,
+    MetaData,
+    Table,
+    Column,
+    String,
+    Integer,
+    Text,
+)
+
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+engine = None
+metadata = MetaData()
+appointments = None
+
+if DATABASE_URL:
+    try:
+        engine = create_engine(DATABASE_URL)
+        # Definimos la tabla appointments de forma compatible
+        appointments = Table(
+            "appointments",
+            metadata,
+            Column("id", String, primary_key=True),
+            Column("patient_name", String, nullable=False),
+            Column("patient_email", String, nullable=False),
+            Column("reason", Text, nullable=False),
+            Column("price", Integer, nullable=False),
+            Column("duration", Integer, nullable=False),
+            Column("status", String, nullable=False),
+            Column("start_at", Text, nullable=False),
+            Column("mp_preference_id", String, nullable=True),
+        )
+        # NO hacemos metadata.create_all() porque la tabla ya existe en Railway.
+    except Exception as e:
+        print("ERROR al inicializar conexión a DB:", e)
+        engine = None
+        appointments = None
+else:
+    print("ATENCIÓN: DATABASE_URL no está configurada. No se guardarán turnos en DB.")
+
+
+# ─────────────────────────────────────────────────────────
 # Variables de entorno
 # ─────────────────────────────────────────────────────────
 BASE_URL = os.getenv("BASE_URL", "").rstrip("/")          # ej: https://telehealth-backend-production-0021.up.railway.app
@@ -46,7 +91,7 @@ def get_webhook_url() -> Optional[str]:
 # ─────────────────────────────────────────────────────────
 app = FastAPI(
     title="Teleconsulta Emilio",
-    version="1.0.0",
+    version="1.1.0",
     openapi_url="/openapi.json",
 )
 
@@ -116,7 +161,7 @@ class ApptOut(BaseModel):
 # ─────────────────────────────────────────────────────────
 @app.get("/", tags=["default"])
 def root():
-    return {"ok": True, "service": "telehealth-backend", "version": "1.0.0"}
+    return {"ok": True, "service": "telehealth-backend", "version": "1.1.0"}
 
 
 @app.get("/ping", tags=["default"])
@@ -138,15 +183,15 @@ def login(payload: LoginIn):
 
 
 # ─────────────────────────────────────────────────────────
-# Crear turno y preferencia de pago en Mercado Pago
+# Crear turno y preferencia de pago en Mercado Pago + guardar en DB
 # ─────────────────────────────────────────────────────────
 @app.post("/appointments", response_model=ApptOut, tags=["appointments"])
 def create_appointment(payload: ApptIn):
     """
     Crea una preferencia de pago en Mercado Pago y devuelve el checkout_url.
-    También embebe metadatos básicos del turno en metadata.
+    También guarda el turno en la tabla appointments si hay DB configurada.
     """
-    # ID simple (podés migrar a DB luego)
+    # ID para el turno
     appt_id = str(uuid.uuid4())
 
     # Cliente MP
@@ -175,7 +220,7 @@ def create_appointment(payload: ApptIn):
             "reason": payload.reason,
             "price": payload.price,
             "duration": payload.duration,
-            "start_at": payload.start_at,  # 🔹 Campo correcto que espera el backend
+            "start_at": payload.start_at,
         },
     }
 
@@ -193,11 +238,35 @@ def create_appointment(payload: ApptIn):
                 status_code=500,
                 detail="No se pudo obtener checkout_url desde Mercado Pago.",
             )
+        mp_preference_id = mp_resp.get("id")
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Error al crear preferencia en Mercado Pago: {str(e)}",
         )
+
+    # ─────────────────────────────────────────────────────
+    # Guardar en DB si hay conexión y tabla definida
+    # ─────────────────────────────────────────────────────
+    if engine is not None and appointments is not None:
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    appointments.insert().values(
+                        id=appt_id,
+                        patient_name=payload.patient_name,
+                        patient_email=payload.patient_email,
+                        reason=payload.reason,
+                        price=payload.price,
+                        duration=payload.duration,
+                        status="created",
+                        start_at=payload.start_at,
+                        mp_preference_id=mp_preference_id,
+                    )
+                )
+        except Exception as db_err:
+            # No rompemos el flujo de pago si falla la DB; solo registramos.
+            print("ERROR al guardar turno en DB:", db_err)
 
     return ApptOut(
         id=appt_id,
@@ -218,6 +287,5 @@ async def payments_webhook(request: Request):
     Por ahora solo registra el evento y responde 200 OK.
     """
     body = await request.json()
-    # En el futuro podés guardar esto en DB o actualizar estado del turno.
     print("Webhook Mercado Pago:", body)
     return {"ok": True}

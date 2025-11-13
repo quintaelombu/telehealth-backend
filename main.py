@@ -12,29 +12,20 @@ engine = create_engine(DATABASE_URL)from fastapi import FastAPI, HTTPException, 
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
-# ─────────────────────────────────────────────────────────
-        # Definimos la tabla appointments de forma compatible
-        appointments = Table(
-            "appointments",
-            metadata,
-            Column("id", String, primary_key=True),
-            Column("patient_name", String, nullable=False),
-            Column("patient_email", String, nullable=False),
-            Column("reason", Text, nullable=False),
-            Column("price", Integer, nullable=False),
-            Column("duration", Integer, nullable=False),
-            Column("status", String, nullable=False),
-            Column("start_at", Text, nullable=False),
-            Column("mp_preference_id", String, nullable=True),
-        )
-        # NO hacemos metadata.create_all() porque la tabla ya existe en Railway.
+from sqlalchemy import create_engine, text
+
+DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
+
+if not DATABASE_URL:
+    print("ATENCIÓN: DATABASE_URL no está configurada. No se guardarán turnos en DB.")
+    engine = None
+else:
+    try:
+        engine = create_engine(DATABASE_URL)
     except Exception as e:
         print("ERROR al inicializar conexión a DB:", e)
-        engine = None
-        appointments = None
-else:
+        engine = Noneelse:
     print("ATENCIÓN: DATABASE_URL no está configurada. No se guardarán turnos en DB.")
-
 
 # ─────────────────────────────────────────────────────────
 # Variables de entorno

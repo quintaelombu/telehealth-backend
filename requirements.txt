@@ -8,3 +8,4 @@ PyJWT==2.9.0
 requests==2.32.3
 mercadopago==2.2.0
 pydantic[email]
+psycopg2-binary==2.9.9

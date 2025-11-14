@@ -10,33 +10,41 @@ from sqlalchemy import (
     String,
     Integer,
     Text,
+    DateTime,
+    text,
 )
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
 # ─────────────────────────────────────────────────────────
-# Base de datos (Postgres en Railway, vía SQLAlchemy + psycopg v3)
+# DB: URL desde Railway
 # ─────────────────────────────────────────────────────────
-
-DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
+DATABASE_URL = (
+    os.getenv("DATABASE_URL")
+    or os.getenv("POSTGRES_URL")
+    or os.getenv("DATABASE_PUBLIC_URL")
+)
 
 engine = None
 metadata = None
 appointments = None
 
 if DATABASE_URL:
-    # Forzamos a usar el driver psycopg v3 y NO psycopg2
+    # Ajustar para usar psycopg v3 con SQLAlchemy
     if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
-    elif DATABASE_URL.startswith("postgresql://"):
-        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+        DATABASE_URL = DATABASE_URL.replace(
+            "postgres://", "postgresql+psycopg://", 1
+        )
+    elif DATABASE_URL.startswith("postgresql://") and "+psycopg" not in DATABASE_URL:
+        DATABASE_URL = DATABASE_URL.replace(
+            "postgresql://", "postgresql+psycopg://", 1
+        )
 
     try:
-        engine = create_engine(DATABASE_URL)
+        engine = create_engine(DATABASE_URL, future=True)
         metadata = MetaData()
 
-        # Definimos la tabla appointments de forma compatible con la que ya existe en Railway
         appointments = Table(
             "appointments",
             metadata,
@@ -44,21 +52,20 @@ if DATABASE_URL:
             Column("doctor_id", String, nullable=True),
             Column("patient_id", String, nullable=True),
             Column("service_id", String, nullable=True),
-            Column("when_at", Text, nullable=False),
+            Column("when_at", String, nullable=False),
             Column("status", String, nullable=False),
             Column("price", Integer, nullable=False),
             Column("currency", String, nullable=False),
             Column("mp_preference_id", String, nullable=True),
             Column("video_url", Text, nullable=True),
-            Column("created_at", Text, nullable=True),
+            Column("created_at", DateTime, server_default=text("CURRENT_TIMESTAMP")),
         )
 
-        # IMPORTANTE: no hacemos metadata.create_all() porque la tabla ya existe en Railway
-        print("Conexión a DB inicializada correctamente.")
+        # NO hacemos metadata.create_all(): la tabla ya existe en Railway
+        print("DB OK: conexión inicializada correctamente.")
     except Exception as e:
         print("ERROR al inicializar DB:", e)
         engine = None
-        metadata = None
         appointments = None
 else:
     print("ATENCIÓN: DATABASE_URL no está configurada. No se guardarán turnos en DB.")
@@ -67,7 +74,6 @@ else:
 # ─────────────────────────────────────────────────────────
 # Variables de entorno generales
 # ─────────────────────────────────────────────────────────
-
 BASE_URL = os.getenv("BASE_URL", "").rstrip("/")          # ej: https://telehealth-backend-production-0021.up.railway.app
 FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")  # ej: https://teleconsulta-emilio.vercel.app
 MP_ACCESS_TOKEN = os.getenv("MP_ACCESS_TOKEN", "")
@@ -103,14 +109,16 @@ def get_webhook_url() -> Optional[str]:
 # ─────────────────────────────────────────────────────────
 # App FastAPI
 # ─────────────────────────────────────────────────────────
-
 app = FastAPI(
     title="Teleconsulta Emilio",
     version="1.0.0",
     openapi_url="/openapi.json",
 )
 
+
+# ─────────────────────────────────────────────────────────
 # CORS
+# ─────────────────────────────────────────────────────────
 origins = []
 
 if FRONTEND_URL:
@@ -138,7 +146,6 @@ app.add_middleware(
 # ─────────────────────────────────────────────────────────
 # Modelos
 # ─────────────────────────────────────────────────────────
-
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
@@ -169,7 +176,6 @@ class ApptOut(BaseModel):
 # ─────────────────────────────────────────────────────────
 # Rutas básicas
 # ─────────────────────────────────────────────────────────
-
 @app.get("/", tags=["default"])
 def root():
     return {"ok": True, "service": "telehealth-backend", "version": "1.0.0"}
@@ -181,9 +187,8 @@ def ping():
 
 
 # ─────────────────────────────────────────────────────────
-# Auth simple (para que exista /auth/login en Swagger)
+# Auth muy simple
 # ─────────────────────────────────────────────────────────
-
 @app.post("/auth/login", response_model=LoginOut, tags=["auth"])
 def login(payload: LoginIn):
     """
@@ -195,30 +200,29 @@ def login(payload: LoginIn):
 
 
 # ─────────────────────────────────────────────────────────
-# Crear turno y preferencia de pago en Mercado Pago
+# Crear turno + preferencia de pago en Mercado Pago
 # ─────────────────────────────────────────────────────────
-
 @app.post("/appointments", response_model=ApptOut, tags=["appointments"])
 def create_appointment(payload: ApptIn):
     """
     Crea una preferencia de pago en Mercado Pago y devuelve el checkout_url.
-    También guarda el turno en la tabla appointments si la DB está disponible.
+    También guarda el turno en la tabla appointments (si hay DB).
     """
     appt_id = str(uuid.uuid4())
 
-    # Cliente Mercado Pago
+    # Cliente MP
     try:
         sdk = get_mp_client()
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Datos de preferencia
+    # Datos de preferencia MP
     preference = {
         "items": [
             {
                 "title": payload.reason or "Consulta pediátrica",
                 "quantity": 1,
-                "unit_price": float(payload.price),  # ARS
+                "unit_price": float(payload.price),
             }
         ],
         "payer": {
@@ -240,12 +244,12 @@ def create_appointment(payload: ApptIn):
     if webhook_url:
         preference["notification_url"] = webhook_url
 
-    # Crear preferencia en Mercado Pago
+    # Crear preferencia en MP
     try:
         result = sdk.preference().create(preference)
         mp_resp = result.get("response", {})
         checkout_url = mp_resp.get("init_point") or mp_resp.get("sandbox_init_point")
-        mp_preference_id = mp_resp.get("id")
+        mp_pref_id = mp_resp.get("id")
         if not checkout_url:
             raise HTTPException(
                 status_code=500,
@@ -257,7 +261,7 @@ def create_appointment(payload: ApptIn):
             detail=f"Error al crear preferencia en Mercado Pago: {str(e)}",
         )
 
-    # Guardar turno en DB si hay conexión
+    # Guardar en DB (si la conexión está OK)
     if engine is not None and appointments is not None:
         try:
             with engine.begin() as conn:
@@ -265,20 +269,19 @@ def create_appointment(payload: ApptIn):
                     appointments.insert().values(
                         id=appt_id,
                         doctor_id=None,
-                        patient_id=None,
+                        patient_id=payload.patient_email,
                         service_id=None,
                         when_at=payload.start_at,
                         status="created",
                         price=payload.price,
                         currency="ARS",
-                        mp_preference_id=mp_preference_id,
+                        mp_preference_id=mp_pref_id,
                         video_url=None,
-                        created_at=None,
                     )
                 )
+            print(f"Turno {appt_id} guardado en DB.")
         except Exception as e:
-            # No rompemos la app si la DB falla
-            print("ERROR al guardar el turno en DB:", e)
+            print("ERROR al guardar turno en DB:", e)
 
     return ApptOut(
         id=appt_id,
@@ -292,7 +295,6 @@ def create_appointment(payload: ApptIn):
 # ─────────────────────────────────────────────────────────
 # Webhook de Mercado Pago
 # ─────────────────────────────────────────────────────────
-
 @app.post("/payments/webhook", tags=["payments"])
 async def payments_webhook(request: Request):
     """
